@@ -7,7 +7,7 @@ import os
 import re
 
 # 1. Configuration
-API_KEY = "AIzaSyCIy-K9_Kl8UsVAwrdtOcWgHi99lnnjA10"
+API_KEY = ""
 INPUT_PATH = r"D:\Automation2\eci_candidates_with_neta.csv"
 OUTPUT_PATH = r"D:\Automation2\eci_candidates_filled.csv"
 
