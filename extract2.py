@@ -13,8 +13,26 @@ MYNETA_URL = "https://www.myneta.info/"
 
 # ---------------- HELPERS ----------------
 def clean_name(raw_name):
-    """Removes leading numbers like '1. ', '23. ' etc."""
-    return re.sub(r"^\s*\d+\.\s*", "", raw_name).strip()
+    """
+    - Removes leading numbering like '1. ', '23. '
+    - Normalizes 'Dr.', 'DR.', 'dr.' prefix to 'DR'
+    - Removes relational suffixes like S/O, D/O, W/O
+    """
+    if not raw_name:
+        return ""
+    name = raw_name.strip()
+    # Remove leading numbering
+    name = re.sub(r"^\s*\d+\.\s*", "", name)
+    # Normalize DR prefix (Dr., DR., dr. -> DR)
+    name = re.sub(r"^(dr)\.\s*", "DR ", name, flags=re.IGNORECASE)
+    # Remove relational suffixes (S/O, D/O, W/O and variants)
+    name = re.split(
+        r"\s+(S\/O|D\/O|W\/O)\s*[-:]?\s*",
+        name,
+        flags=re.IGNORECASE
+    )[0]
+    return name.strip()
+
 
 def extract_year(text):
     m = re.search(r"\b(19|20)\d{2}\b", text)
@@ -77,82 +95,99 @@ with sync_playwright() as p:
     wait_for_select_ready(page, "#phase")
     page.select_option("#phase", index=1)
 
-    wait_for_select_ready(page, "#constId")
-    page.select_option("#constId", index=1)
-
     page.click("button[name='submitName']")
     page.wait_for_timeout(1500)
     page.click("//button[.//h4[text()='Contesting']]")
     page.wait_for_timeout(1500)
 
-    cards = page.locator("h4.bg-blu")
-    MAX_ROWS = 10  # 🔴 increase later
+    MAX_ROWS = 21  # 🔴 increase later
 
     candidates = []
-    total_cards = cards.count()
-    for i in range(min(total_cards, MAX_ROWS)):
-        card = cards.nth(i)
-        raw_name = card.inner_text().strip()
-        name = clean_name(raw_name)
-        td = card.locator("xpath=ancestor::td")
+    rows_extracted = 0
 
-        party = td.locator(
-            "xpath=.//p[strong[normalize-space()='Party :']]"
-        ).first.inner_text().replace("Party :", "").strip()
-        status = td.locator(
-            "xpath=.//p[strong[normalize-space()='Status :']]"
-        ).first.inner_text().replace("Status :", "").strip()
-        state = td.locator(
-            "xpath=.//p[strong[normalize-space()='State :']]"
-        ).first.inner_text().replace("State :", "").strip()
-        constituency = td.locator(
-            "xpath=.//p[strong[normalize-space()='Constituency :']]"
-        ).first.inner_text().replace("Constituency :", "").strip()
+    while rows_extracted < MAX_ROWS:
+        cards = page.locator("h4.bg-blu")
+        total_cards = cards.count()
+        
+        for i in range(total_cards):
+            if rows_extracted >= MAX_ROWS:
+                break
+                
+            card = cards.nth(i)
+            raw_name = card.inner_text().strip()
+            name = clean_name(raw_name)
+            td = card.locator("xpath=ancestor::td")
 
-        father = address = gender = age = year = ""
-        view_more = td.locator("a:has-text('View more')")
+            party = td.locator(
+                "xpath=.//p[strong[normalize-space()='Party :']]"
+            ).first.inner_text().replace("Party :", "").strip()
+            status = td.locator(
+                "xpath=.//p[strong[normalize-space()='Status :']]"
+            ).first.inner_text().replace("Status :", "").strip()
+            state = td.locator(
+                "xpath=.//p[strong[normalize-space()='State :']]"
+            ).first.inner_text().replace("State :", "").strip()
+            constituency = td.locator(
+                "xpath=.//p[strong[normalize-space()='Constituency :']]"
+            ).first.inner_text().replace("Constituency :", "").strip()
 
-        if view_more.count():
-            with context.expect_page() as p2:
-                view_more.first.click()
-            profile = p2.value
-            profile.wait_for_load_state("domcontentloaded")
+            father = address = gender = age = year = ""
+            view_more = td.locator("a:has-text('View more')")
 
-            father = profile.locator(
-                "xpath=//div[@class='form-group'][.//p[contains(normalize-space(),'Father')]]//div[@class='col-sm-6']/p"
-            ).first.inner_text().strip()
-            address = profile.locator(
-                "xpath=//div[@class='form-group'][.//p[normalize-space()='Address:']]//div[@class='col-sm-6']/p"
-            ).first.inner_text().strip()
-            gender = profile.locator(
-                "xpath=//div[@class='form-group'][.//p[normalize-space()='Gender:']]//div[@class='col-sm-6']/p"
-            ).first.inner_text().strip()
-            age = profile.locator(
-                "xpath=//div[@class='form-group'][.//p[normalize-space()='Age:']]//div[@class='col-sm-6']/p"
-            ).first.inner_text().strip()
+            if view_more.count():
+                with context.expect_page() as p2:
+                    view_more.first.click()
+                profile = p2.value
+                profile.wait_for_load_state("domcontentloaded")
 
-            uploaded_text = profile.locator(
-                "xpath=//div[@class='row'][.//p[strong[normalize-space()='Application Uploaded:']]]"
-                "/div[@class='col-sm-6'][2]//p"
-            ).first.inner_text().strip()
-            year = extract_year(uploaded_text)
+                father = profile.locator(
+                    "xpath=//div[@class='form-group'][.//p[contains(normalize-space(),'Father')]]//div[@class='col-sm-6']/p"
+                ).first.inner_text().strip()
+                address = profile.locator(
+                    "xpath=//div[@class='form-group'][.//p[normalize-space()='Address:']]//div[@class='col-sm-6']/p"
+                ).first.inner_text().strip()
+                gender = profile.locator(
+                    "xpath=//div[@class='form-group'][.//p[normalize-space()='Gender:']]//div[@class='col-sm-6']/p"
+                ).first.inner_text().strip()
+                age = profile.locator(
+                    "xpath=//div[@class='form-group'][.//p[normalize-space()='Age:']]//div[@class='col-sm-6']/p"
+                ).first.inner_text().strip()
 
-            profile.close()
+                uploaded_text = profile.locator(
+                    "xpath=//div[@class='row'][.//p[strong[normalize-space()='Application Uploaded:']]]"
+                    "/div[@class='col-sm-6'][2]//p"
+                ).first.inner_text().strip()
+                year = extract_year(uploaded_text)
 
-        print("ECI:", name, year)
-        candidates.append({
-            "Name": name,
-            "Party": party,
-            "Status": status,
-            "State": state,
-            "Constituency": constituency,
-            "Father/Husband": father,
-            "Address": address,
-            "Gender": gender,
-            "Age": age,
-            "Year": year,
-            "neta_link": "",
-        })
+                profile.close()
+
+            print("ECI:", name, year)
+            candidates.append({
+                "Name": name,
+                "Party": party,
+                "Status": status,
+                "State": state,
+                "Constituency": constituency,
+                "Father/Husband": father,
+                "Address": address,
+                "Gender": gender,
+                "Age": age,
+                "Year": year,
+                "neta_link": "",
+            })
+            rows_extracted += 1
+
+        # Check for "Next" button to load more rows
+        next_button = page.locator("a:has-text('Next')")
+        if next_button.count() > 0 and rows_extracted < MAX_ROWS:
+            try:
+                next_button.first.click()
+                page.wait_for_timeout(1500)
+                continue
+            except Exception:
+                break
+        else:
+            break
 
     ########################################
     # PHASE 2 — MYNETA LINK MAPPING (robust)
@@ -257,6 +292,17 @@ with sync_playwright() as p:
                     if link and link.startswith("/"):
                         link = "https://www.myneta.info" + link
                     return link or ""
+
+            # Check for "Next" button for pagination
+            next_button = page.locator("a:has-text('Next')")
+            if next_button.count() > 0:
+                try:
+                    next_button.first.click()
+                    page.wait_for_timeout(1000)
+                    page.wait_for_selector("table.w3-table > tbody > tr", timeout=7000)
+                    continue
+                except Exception:
+                    pass
 
             # Not found yet — try broader query combining constituency
             if attempt == 1 and constituency:
