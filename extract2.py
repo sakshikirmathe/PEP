@@ -100,7 +100,7 @@ with sync_playwright() as p:
     page.click("//button[.//h4[text()='Contesting']]")
     page.wait_for_timeout(1500)
 
-    MAX_ROWS = 21  # 🔴 increase later
+    MAX_ROWS = 20  # 🔴 KEEP ACCORDINGLY (no of rows to want to be scrapped)
 
     candidates = []
     rows_extracted = 0
@@ -131,10 +131,11 @@ with sync_playwright() as p:
                 "xpath=.//p[strong[normalize-space()='Constituency :']]"
             ).first.inner_text().replace("Constituency :", "").strip()
 
-            father = address = gender = age = year = ""
+            father = address = gender = age = year = eci_link = ""
             view_more = td.locator("a:has-text('View more')")
 
             if view_more.count():
+                eci_link = view_more.first.get_attribute("href") or ""
                 with context.expect_page() as p2:
                     view_more.first.click()
                 profile = p2.value
@@ -173,6 +174,7 @@ with sync_playwright() as p:
                 "Gender": gender,
                 "Age": age,
                 "Year": year,
+                "eci_link": eci_link,
                 "neta_link": "",
             })
             rows_extracted += 1
