@@ -91,16 +91,12 @@ with sync_playwright() as p:
 
     wait_for_select_ready(page, "#states")
     page.select_option("#states", index=1)
-
-    wait_for_select_ready(page, "#phase")
-    page.select_option("#phase", index=1)
-
     page.click("button[name='submitName']")
     page.wait_for_timeout(1500)
     page.click("//button[.//h4[text()='Contesting']]")
     page.wait_for_timeout(1500)
 
-    MAX_ROWS = 20  # 🔴 KEEP ACCORDINGLY (no of rows to want to be scrapped)
+    MAX_ROWS = 4000
 
     candidates = []
     rows_extracted = 0
@@ -348,3 +344,4 @@ with sync_playwright() as p:
         print("No candidates found; nothing to save.")
 
     browser.close()
+
