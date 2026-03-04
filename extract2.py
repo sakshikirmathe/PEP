@@ -69,6 +69,53 @@ def similar(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
+# helpers specifically for cleaning search queries
+
+def clean_name_for_search(raw_name):
+    if not raw_name:
+        return ""
+
+    name = raw_name.strip()
+
+    # remove numbering like "1. "
+    name = re.sub(r"^\s*\d+\.\s*", "", name)
+
+    # remove everything after '('
+    name = re.split(r"\(", name)[0]
+
+    # remove ALIAS and everything after it
+    name = re.split(r"\bALIAS\b", name, flags=re.IGNORECASE)[0]
+
+    # remove @ and everything after it
+    name = re.split(r"@", name)[0]
+
+    # remove weird encoded quotes and everything after them
+    name = re.split(r"[â€˜â€™'`]", name)[0]
+
+    # convert MD. -> MD
+    name = re.sub(r"\bMD\.\b", "MD", name, flags=re.IGNORECASE)
+
+    # remove remaining dots
+    name = name.replace(".", "")
+
+    # remove extra spaces
+    name = re.sub(r"\s+", " ", name)
+
+    return name.strip()
+
+
+def clean_constituency_for_search(constituency):
+    if not constituency:
+        return ""
+
+    constituency = constituency.strip()
+
+    if constituency.upper() == "BHOREY":
+        return "BHORE (SC)"
+
+    return constituency
+
+
 # ---------------- MAIN ----------------
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=False)
@@ -156,8 +203,8 @@ with sync_playwright() as p:
                 ).first.inner_text().strip()
                 year = extract_year(uploaded_text)
 
-                profile.close()
-
+                profile.close()    
+                
             print("ECI:", name, year)
             candidates.append({
                 "Name": name,
@@ -194,138 +241,85 @@ with sync_playwright() as p:
     myneta.goto(MYNETA_URL)
     myneta.wait_for_selector("input[name='q']")
 
-    def search_myneta_for_candidate(page, name, constituency, year, max_retries=3):
-        """Try multiple search approaches and use fuzzy matching to find best link."""
-        from urllib.parse import quote_plus
-
-        tried_urls = set()
+    def search_myneta_for_candidate(page, name, constituency, year):
+        """Simpler search that uses the clean helpers and a single attempt."""
         name_norm = normalize_text(name)
         const_norm = normalize_text(constituency)
 
-        for attempt in range(1, max_retries + 1):
-            # Primary: use site search box if present
-            try:
-                if page.locator("input[name='q']").count():
-                    sb = page.locator("input[name='q']")
-                    sb.fill("")
-                    sb.fill(name)
-                    sb.press("Enter")
-                else:
-                    page.goto(MYNETA_URL)
-                    page.wait_for_selector("input[name='q']", timeout=5000)
-                    sb = page.locator("input[name='q']")
-                    sb.fill(name)
-                    sb.press("Enter")
-            except Exception:
-                # ignore and fall through to direct search
-                pass
+        # always reset to homepage first
+        page.goto(MYNETA_URL)
+        page.wait_for_selector("input[name='q']", timeout=5000)
 
-            # Wait for results table to appear (or try direct search URL)
-            try:
-                page.wait_for_selector("table.w3-table > tbody > tr", timeout=7000)
-            except Exception:
-                # fallback to direct search URL
-                q = quote_plus(name)
-                url = MYNETA_URL + f"search.php?q={q}"
-                if url not in tried_urls:
-                    tried_urls.add(url)
-                    try:
-                        page.goto(url)
-                        page.wait_for_selector("table.w3-table > tbody > tr", timeout=7000)
-                    except Exception:
-                        # try again after small backoff
-                        time.sleep(1 + attempt)
-                        continue
-                else:
-                    time.sleep(1 + attempt)
-                    continue
+        sb = page.locator("input[name='q']")
+        sb.fill("")
+        sb.fill(name)
+        sb.press("Enter")
 
-            # stabilize rows count (wait until it stops changing)
-            rows = page.locator("table.w3-table > tbody > tr")
-            for _ in range(6):
-                c1 = rows.count()
-                page.wait_for_timeout(300)
-                c2 = rows.count()
-                if c1 == c2:
-                    break
+        page.wait_for_timeout(1500)
+        rows = page.locator("table.w3-table tbody tr")
 
-            # evaluate rows
-            for i in range(rows.count()):
-                r = rows.nth(i)
-                try:
-                    if r.locator("td").count() < 4 or r.locator("a").count() == 0:
-                        continue
-                    cname_raw = r.locator("a").first.inner_text().strip()
-                    cconst_raw = r.locator("td:nth-child(3)").inner_text().strip()
-                    election_raw = r.locator("td:nth-child(4)").inner_text().strip()
-                except Exception:
-                    continue
+        if rows.count() == 0:
+            return ""
 
-                cname = normalize_text(cname_raw)
-                cconst = normalize_text(cconst_raw)
+        for i in range(rows.count()):
+            r = rows.nth(i)
+            if r.locator("td").count() < 4 or r.locator("a").count() == 0:
+                continue
 
-                # name match: exact substring OR fuzzy match above threshold
-                name_sim = similar(name_norm, cname)
-                name_ok = (name_norm in cname) or (name_sim >= 0.70)
+            cname_raw = r.locator("a").first.inner_text().strip()
+            cconst_raw = r.locator("td:nth-child(3)").inner_text().strip()
+            election_raw = r.locator("td:nth-child(4)").inner_text().strip()
 
-                # constituency match: empty constituency is allowed, otherwise check substring or shared token
-                const_ok = False
-                if not const_norm:
-                    const_ok = True
-                else:
-                    if const_norm in cconst:
-                        const_ok = True
-                    else:
-                        # check token overlap
-                        if len(set(const_norm.split()) & set(cconst.split())) > 0:
-                            const_ok = True
+            cname = normalize_text(cname_raw)
+            cconst = normalize_text(cconst_raw)
 
-                # year match: if year present in ECI record, ensure it appears in election column
-                year_ok = True
-                if year:
-                    year_ok = str(year) in election_raw
+            name_sim = similar(name_norm, cname)
+            name_ok = (name_norm in cname) or (name_sim >= 0.70)
 
-                if name_ok and const_ok and year_ok:
-                    link = r.locator("a").first.get_attribute("href")
-                    if link and link.startswith("/"):
-                        link = "https://www.myneta.info" + link
-                    return link or ""
+            const_ok = False
+            if not const_norm:
+                const_ok = True
+            elif const_norm in cconst:
+                const_ok = True
+            elif len(set(const_norm.split()) & set(cconst.split())) > 0:
+                const_ok = True
 
-            # Check for "Next" button for pagination
-            next_button = page.locator("a:has-text('Next')")
-            if next_button.count() > 0:
-                try:
-                    next_button.first.click()
-                    page.wait_for_timeout(1000)
-                    page.wait_for_selector("table.w3-table > tbody > tr", timeout=7000)
-                    continue
-                except Exception:
-                    pass
+            year_ok = True
+            if year:
+                year_ok = str(year) in election_raw
 
-            # Not found yet — try broader query combining constituency
-            if attempt == 1 and constituency:
-                q = quote_plus(f"{name} {constituency}")
-                url = MYNETA_URL + f"search.php?q={q}"
-                if url not in tried_urls:
-                    tried_urls.add(url)
-                    try:
-                        page.goto(url)
-                        page.wait_for_selector("table.w3-table > tbody > tr", timeout=7000)
-                        continue
-                    except Exception:
-                        pass
+            if name_ok and const_ok and year_ok:
+                link = r.locator("a").first.get_attribute("href")
+                if link and link.startswith("/"):
+                    link = "https://www.myneta.info" + link
+                return link or ""
 
-            # backoff and retry
-            time.sleep(1 + attempt)
-
-        # nothing matched after retries
         return ""
 
     # search for each candidate
     for c in candidates:
-        link = search_myneta_for_candidate(myneta, c["Name"], c.get("Constituency", ""), c.get("Year", ""))
+        # 🔥 skip ones that already have a link
+        if c.get("neta_link"):
+            continue
+
+        original_name = c["Name"]
+        search_name = clean_name_for_search(original_name)
+        search_const = clean_constituency_for_search(c.get("Constituency", ""))
+
+        print("Original:", original_name)
+        print("Searching as:", search_name)
+
+        link = search_myneta_for_candidate(
+            myneta,
+            search_name,
+            search_const,
+            c.get("Year", "")
+        )
+
         c["neta_link"] = link or ""
+        print("Found:", link)
         print("MyNeta:", c["Name"], c["neta_link"])
+        print("-" * 50)
 
 
         
